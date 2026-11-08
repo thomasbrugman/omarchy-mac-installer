@@ -1251,16 +1251,14 @@ class AsahiStage1Adapter:
         if self.preflight_complete:
             return
         metadata = self._load_metadata()
-        templates = [
-            template
-            for template in metadata["os_list"]
-            if template.get("omarchy_target") == TARGET
-        ]
-        if len(templates) != 1:
+        # A payload may also carry a stub-only template for a single-boot
+        # install. The target names tell them apart; position never does.
+        try:
+            template = omarchy_planner.select_template(metadata)
+        except omarchy_planner.PlanningError:
             raise AsahiAdapterError(
                 "metadata must contain exactly one Omarchy full-OS target"
             )
-        template = templates[0]
         use_helper_recovery = (template.get("recovery_gui") is None
                                and self.recovery_app is not None)
         if use_helper_recovery:
@@ -2112,11 +2110,19 @@ class AsahiStage1Adapter:
             )
 
         partitions = self.template.get("partitions")
-        expected = (
+        full_os = (
             ("EFI", "EFI", "esp", None, False),
             ("Boot", "Linux", None, "boot.img", False),
             ("Root", "Linux", None, "root.img", True),
         )
+        # A stub-only template creates the ESP alone: /boot and root are made
+        # later, in Recovery, once macOS is gone. Anything else must still be
+        # the full three-partition install, in order.
+        stub_only = full_os[:1]
+        if self.template.get("omarchy_target") == omarchy_planner.STUB_ONLY_TARGET:
+            expected = stub_only
+        else:
+            expected = full_os
         if not isinstance(partitions, list) or len(partitions) != len(expected):
             raise AsahiAdapterError("invalid Omarchy full-OS partitions")
         for partition, contract in zip(partitions, expected):
@@ -2138,12 +2144,12 @@ class AsahiStage1Adapter:
             raise AsahiAdapterError("invalid Omarchy ESP metadata")
 
         required = {
-            "boot.img",
-            "root.img",
             "esp/m1n1/boot.bin",
             "esp/EFI/BOOT/BOOTAA64.EFI",
             "omarchy-volume.icns",
         }
+        if expected is full_os:
+            required |= {"boot.img", "root.img"}
         members = {}
         for member in self.osins.pkg.infolist():
             path = PurePosixPath(member.filename)
@@ -2183,7 +2189,7 @@ class AsahiStage1Adapter:
             if capacity <= 0 or members[partition["image"]].file_size > capacity:
                 raise AsahiAdapterError("Omarchy image exceeds partition capacity")
         for name in ("boot.img", "root.img"):
-            if members[name].file_size % 4096 != 0:
+            if name in members and members[name].file_size % 4096 != 0:
                 raise AsahiAdapterError("Omarchy image size is not 4KiB aligned")
 
     def _esp_members(self):

@@ -939,7 +939,7 @@ private struct InstallModeCard: View {
     .contentShape(Rectangle())
     .onTapGesture { if enabled { onSelect() } }
     .accessibilityElement(children: .combine)
-    .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    .accessibilityAddTraits(selected ? [.isButton, .isSelected] : [.isButton])
     .opacity(enabled ? 1 : 0.6)
   }
 }

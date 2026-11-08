@@ -11,6 +11,7 @@ from util import align_down
 
 
 TARGET = "apple-silicon-full-os"
+STUB_ONLY_TARGET = "apple-silicon-stub-only"
 MAX_INPUT_BYTES = 65_536
 REPLACE_ESP_LABEL = "EFI - OMARC"
 LINUX_PARTITION_TYPE = "Linux Filesystem"
@@ -101,27 +102,42 @@ def _resize_offer(installer, part, bounds, floor, part_align):
     return floor, minimum, minimum
 
 
+def select_template(data, target=TARGET):
+    """The one template for this install mode.
+
+    A payload may carry both the full-OS template and the stub-only one a
+    single-boot install uses. They are told apart by target name, never by
+    position, so a payload with neither or with two of the asked-for kind is
+    still refused.
+    """
+    templates = [
+        template
+        for template in data["os_list"]
+        if template.get("omarchy_target") == target
+    ]
+    if len(templates) != 1:
+        raise PlanningError(
+            "metadata must contain exactly one Omarchy Apple "
+            + ("stub-only" if target == STUB_ONLY_TARGET else "full-OS")
+            + " target"
+        )
+    return templates[0]
+
+
 def collect_inventory(
     installer,
     free_parts,
     resizable_parts,
     stub_size,
     part_align,
+    target=TARGET,
 ):
-    templates = [
-        template
-        for template in installer.data["os_list"]
-        if template.get("omarchy_target") == TARGET
-    ]
-    if len(templates) != 1:
-        raise PlanningError(
-            "metadata must contain exactly one Omarchy Apple full-OS target"
-        )
+    template = select_template(installer.data, target)
 
     os_installer = osinstall.OSInstaller(
         installer.dutil,
         installer.data,
-        templates[0],
+        template,
     )
     floor, recommended = _install_bounds(stub_size, os_installer)
     candidates = []
@@ -165,7 +181,7 @@ def collect_inventory(
     candidates.extend(
         collect_existing_installs(
             installer,
-            templates[0].get("default_os_name"),
+            template.get("default_os_name"),
             floor,
             part_align,
             recommended,
@@ -215,26 +231,51 @@ def collect_existing_installs(
         ]
         if len(stubs) != 1:
             continue
-        members = parts[index : index + 4]
-        if len(members) != 4 or any(member.free for member in members):
+        wanted = range(4, 1, -1)
+        members = None
+        for count in wanted:
+            candidate = parts[index : index + count]
+            if len(candidate) != count or any(member.free for member in candidate):
+                continue
+            esp = candidate[1]
+            # diskutil only fills Partition.label for APFS volumes; the ESP is
+            # a FAT partition whose name arrives as the raw record's VolumeName.
+            esp_label = (
+                esp.label or (getattr(esp, "info", None) or {}).get("VolumeName") or ""
+            )
+            if esp_label != REPLACE_ESP_LABEL or any(
+                not member.uuid for member in candidate
+            ):
+                continue
+            # A complete install is stub, ESP, /boot, root. A single-boot
+            # install that stopped before Recovery is stub and ESP alone, and
+            # recognising it is what stops a second stub being planned beside
+            # it. The count alone cannot tell a finished stage one from a full
+            # install whose root is missing, so the two-partition reading is
+            # taken only when nothing Linux follows: otherwise this is a
+            # partial full install, which is refused exactly as before.
+            if count == 4:
+                if (
+                    candidate[2].type != LINUX_PARTITION_TYPE
+                    or candidate[3].type != LINUX_PARTITION_TYPE
+                ):
+                    continue
+            elif index + 2 < len(parts):
+                following = parts[index + 2]
+                if not following.free and following.type == LINUX_PARTITION_TYPE:
+                    continue
+            members = candidate
+            break
+        if members is None:
             continue
-        esp, boot, root = members[1:]
-        # diskutil only fills Partition.label for APFS volumes; the ESP is a
-        # FAT partition whose name arrives in the raw record as VolumeName.
-        esp_label = esp.label or (getattr(esp, "info", None) or {}).get("VolumeName") or ""
-        if (
-            esp_label != REPLACE_ESP_LABEL
-            or boot.type != LINUX_PARTITION_TYPE
-            or root.type != LINUX_PARTITION_TYPE
-            or any(not member.uuid for member in members)
-        ):
-            continue
+        last = members[-1]
         start = part.offset
         if index > 0 and parts[index - 1].free:
             start = parts[index - 1].offset
-        end = root.offset + root.size
-        if index + 4 < len(parts) and parts[index + 4].free:
-            following = parts[index + 4]
+        end = last.offset + last.size
+        following_index = index + len(members)
+        if following_index < len(parts) and parts[following_index].free:
+            following = parts[following_index]
             end = following.offset + following.size
         length = align_down(end - start, part_align)
         if length < minimum_install:
