@@ -80,9 +80,9 @@ the release pipeline can use it.
 
 The image builder still writes only the full-OS template. Until it emits the
 stub-only one, the engine has nothing of that kind to select, so the gate stays
-off. Writing it is a change to the metadata every published payload carries,
-which is the payload's signed identity in the catalog, so it belongs with a
-Mac to qualify it rather than with this branch.
+off. Writing it changes the metadata every published payload carries, which is the
+payload's signed identity in the catalog. That belongs with a Mac to qualify
+it, not with this branch.
 
 ## Unverified
 
