@@ -71,13 +71,18 @@ Four engine sites still refuse it:
   `EFI`, `Boot`, `Root` in that order. A stub-only template fails that check by
   design.
 
-The fourth one has a consequence outside the obvious. With the template
-dropped to the ESP alone, `_install_bounds` computes the plan floor from that
-template's `min_size`, which is 524 MB, so the planner would offer candidates a
-megabyte wide. The stub is not in that sum. Any plan shorter than the stub then
-fails in `prepare_target`, where `os_size` goes negative, which is a refusal
-after the point the plan was approved. The floor has to keep the stub even when
-the template does not create `/boot` or root.
+The plan floor already survives the change. `_install_bounds` adds `stub_size`
+to the template's `min_size`, so a stub-only template floors at the stub plus
+the ESP rather than the ESP alone. `Engine/tests/test_write_once_template_floor.py`
+pins that for this shape, including the `os_size` arithmetic `prepare_target`
+passes to `partition_disk`.
+
+The three target checks are the easy part of the change, because the split is
+a target name, not a partition count. A second template that reuses
+`apple-silicon-full-os` makes the planner refuse outright: two matching
+templates is the same "exactly one" error as zero. It needs its own target
+name, and the planner needs to choose between the two by the mode the person
+picked rather than by position in the list.
 
 ## Unverified
 
