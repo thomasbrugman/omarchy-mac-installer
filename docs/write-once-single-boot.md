@@ -47,9 +47,48 @@ The same reading covers `RecoveryOwnerResolver`: a recovery account is an APFS
 volume owner on the stub's Data volume and satisfies the ownership check on its
 own, which is what makes this work with no macOS account present.
 
+## What the engine has to change, and why it is blocked
+
+The UI for this is written and behind a gate that defaults to off
+(`InstallerEnvironment.supportsReplaceMacOS`). Turning it on needs engine
+changes that are pinned by `Engine/source-lock.json`, so they need a lock bump
+and a rebuilt archive, and the base archive is not in this checkout.
+
+The template half is arithmetic and works. A stub-only payload template whose
+`partitions` list is the ESP alone gives `OSInstaller.min_size` of 524 MB, and
+`prepare_target` passes `os_size = plan.length_bytes - stub_size`, which is
+exactly the ESP. `partition_disk` then computes `expand_size` of zero and its
+own `assert expand_size >= 0` passes. So the sizes line up without a special
+case.
+
+Four engine sites still refuse it:
+
+- `omarchy_planner.py:116`, `omarchy_asahi.py:1259` and
+  `omarchy_firmware.py:82` each require exactly one template whose
+  `omarchy_target` is `apple-silicon-full-os`. A second template with a
+  different target makes every one of them raise.
+- `omarchy_asahi.py:2120` requires the template's partition list to be exactly
+  `EFI`, `Boot`, `Root` in that order. A stub-only template fails that check by
+  design.
+
+The fourth one has a consequence outside the obvious. With the template
+dropped to the ESP alone, `_install_bounds` computes the plan floor from that
+template's `min_size`, which is 524 MB, so the planner would offer candidates a
+megabyte wide. The stub is not in that sum. Any plan shorter than the stub then
+fails in `prepare_target`, where `os_size` goes negative, which is a refusal
+after the point the plan was approved. The floor has to keep the stub even when
+the template does not create `/boot` or root.
+
 ## Unverified
 
 None of this has run on a Mac. The open questions are whether a stub-only
 payload template is accepted end to end, whether Recovery completes enrollment
 on a stub with no root, whether `deleteContainer` succeeds against a full macOS
 container, and whether Recovery still offers a macOS reinstall afterwards.
+
+One gap is not a question of hardware but of code, and it would bite before any
+of those. `collect_existing_installs` (`omarchy_planner.py:218`) recognises an
+install as exactly four consecutive partitions. A stub-only install has two, so
+an interrupted stage one would not be recognised: the installer would neither
+offer to replace it nor refuse, and would plan a second stub beside the first.
+That has to be handled with the template change, not after it.
