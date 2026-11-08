@@ -150,6 +150,35 @@
     private var lastHost: HostDisplay?
     private var lastOmarchyBytes: UInt64?
     private var lastPrepared: (plan: PlanDisplay, update: AssetProgressUpdate)?
+    /// How the person chose to use the disk. It stays `.nextToMacOS` unless
+    /// the environment can actually replace macOS, so a build that cannot
+    /// never reaches the destructive path by any input.
+    public private(set) var installMode: InstallMode = .nextToMacOS
+    /// The sizes the single-boot screens show, or nil when the mode is not
+    /// offered. Read from the environment so it matches what it can do.
+    public var singleBootLayout: SingleBootLayout? {
+      guard environment.supportsReplaceMacOS else { return nil }
+      return environment.singleBootLayout
+    }
+    public var canChooseInstallMode: Bool {
+      environment.supportsReplaceMacOS && singleBootLayout != nil
+    }
+    /// The person may switch modes only before the plan is approved: after
+    /// that the disk work is bound to the plan they approved.
+    public var canChangeInstallMode: Bool {
+      canChooseInstallMode && canInspect && !isEditingSize && !hasExecutionStarted
+    }
+    public func chooseInstallMode(_ mode: InstallMode) {
+      guard canChangeInstallMode else { return }
+      guard mode != .replaceMacOS || canChooseInstallMode else { return }
+      guard mode != installMode else { return }
+      installMode = mode
+      // The two modes approve different things, so a tick carried over from
+      // the other one would approve the wrong sentence.
+      if case .planReview(let plan, _) = phase {
+        phase = .planReview(plan, acknowledged: false)
+      }
+    }
     /// The approved plan the engine refused before changing the disk, kept so
     /// a re-plan can start from the size the person chose.
     private var refusedPlan: PlanDisplay?
@@ -995,6 +1024,9 @@
       isExecuting = false
       lastHost = nil
       refusedPlan = nil
+      // A fresh inspection is a fresh choice: never inherit a destructive
+      // mode from a previous pass.
+      installMode = .nextToMacOS
       stopPrefetch()
     }
 

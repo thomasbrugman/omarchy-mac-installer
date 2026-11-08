@@ -12,6 +12,9 @@
     case emptyReply, helperFailure, degradedProgress, recoveryRetry, manualRecovery
     case shutdownFailure, completed, installationMedia, spaceChanged, preparedResumeMismatch
     case skippedRecoveryAccount, startedRecoveryAccount
+    /// The write-once single-boot flow. It exists so the choice, the plan and
+    /// the confirmation can be reviewed on a Mac whose engine cannot do it.
+    case singleBoot
 
     public var id: String { rawValue }
     public var title: String {
@@ -50,6 +53,7 @@
       case .installationMedia: "Installation media required"
       case .spaceChanged: "Space shrinks before install · engine refuses plan"
       case .preparedResumeMismatch: "Prepared resume target changed"
+      case .singleBoot: "Single boot · replace macOS"
       }
     }
 
@@ -87,6 +91,8 @@
         "Recovery finished and a recovery account was started but never authorized. The page says Omarchy is already installed with an Optional note about finishing it. Installation → Finish Recovery Password… shows the resume and authorize steps with Shut down, and Cancel returns."
       case .channelUnreachable:
         "The test channel's catalog address returns 404. Its channel label says Couldn’t load, and Continue reports a server problem, never a missing Mac release."
+      case .singleBoot:
+        "This is the only build that offers Replace macOS. Choose it, press Continue, and check the plan’s shrunk size, the After bar and the confirmation sheet all name the same numbers. Every figure comes from the simulated layout, not from the copy."
       default:
         "Walk through the installer with test data. Check keyboard navigation, smaller windows, and activity details. Reset starts again."
       }
@@ -117,6 +123,19 @@
     public var isSimulation: Bool { true }
     public var installationBlocked: Bool { scenario == .unsupported }
     public var engineSupported: Bool { scenario != .unsupported && scenario != .engineUnavailable }
+    /// The single-boot screens exist to be reviewed. With no Mac to run them
+    /// on, this scenario is the only place they appear, and it is the only
+    /// environment that turns the gate on.
+    public var supportsReplaceMacOS: Bool { scenario == .singleBoot }
+    public var singleBootLayout: SingleBootLayout? {
+      guard scenario == .singleBoot else { return nil }
+      return try? SingleBootLayout(
+        diskBytes: 400_000_000_000,
+        macOSBytes: 300_000_000_000,
+        stubBytes: 5_999_951_872,
+        espBytes: 524_288_000,
+        bootBytes: 2_000_000_000)
+    }
     public var hasApprovedPlan: Bool { lock.withLock { approved } }
     public var helperStatus: HelperDisplay {
       HelperDisplay(status: scenario == .missingHelper ? .missing : .current)

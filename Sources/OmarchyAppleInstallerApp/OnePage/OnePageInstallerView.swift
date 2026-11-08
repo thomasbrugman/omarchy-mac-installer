@@ -12,6 +12,9 @@ struct OnePageInstallerView: View {
   @Environment(\.scenePhase) private var scenePhase
   @State private var session: InstallerSession
   @State private var showsRecoveryRetryConfirmation = false
+  /// Set while the replace-macOS confirmation is up, so the destructive
+  /// action is always the second press rather than the first.
+  @State private var showsReplaceConfirmation = false
   /// The last host seen, so the header stays on the page through the phases
   /// that no longer carry it.
   @State private var host: HostDisplay?
@@ -133,6 +136,20 @@ struct OnePageInstallerView: View {
         onCancel: { showsRecoveryRetryConfirmation = false }
       )
     }
+    .sheet(isPresented: $showsReplaceConfirmation) {
+      if let layout = session.singleBootLayout {
+        ConfirmationSheet(
+          title: PlainLanguage.replaceMacOSConfirmationTitle,
+          message: PlainLanguage.replaceMacOSConfirmationBody(layout),
+          action: PlainLanguage.replaceMacOSConfirmationAction,
+          onConfirm: {
+            showsReplaceConfirmation = false
+            installAfterConfirmation()
+          },
+          onCancel: { showsReplaceConfirmation = false }
+        )
+      }
+    }
   }
 
   // MARK: Header — this Mac in one line
@@ -147,7 +164,12 @@ struct OnePageInstallerView: View {
   private var header: some View {
     if let host {
       HStack(spacing: 12) {
-        Text(host.header(chosenOmarchyBytes: chosenOmarchyBytes))
+        // A replacement ends with Omarchy on the whole disk, so naming the
+        // plan's stub-sized extent there would understate what it gets.
+        Text(
+          host.header(
+            chosenOmarchyBytes: session.installMode == .replaceMacOS
+              ? session.singleBootLayout?.omarchyBytes : chosenOmarchyBytes))
           .font(OmarchyTheme.eyebrow)
           .textCase(.uppercase)
           .foregroundStyle(OmarchyTheme.accent)
@@ -187,12 +209,16 @@ struct OnePageInstallerView: View {
       )
 
     case .welcome:
-      Text(PlainLanguage.checkSubheadline)
-        .font(OmarchyTheme.body)
-        .foregroundStyle(OmarchyTheme.secondaryText)
-        .multilineTextAlignment(.center)
-        .frame(maxWidth: .infinity)
-        .padding(.top, 6)
+      if session.canChooseInstallMode {
+        installModeChoice
+      } else {
+        Text(PlainLanguage.checkSubheadline)
+          .font(OmarchyTheme.body)
+          .foregroundStyle(OmarchyTheme.secondaryText)
+          .multilineTextAlignment(.center)
+          .frame(maxWidth: .infinity)
+          .padding(.top, 6)
+      }
 
     case .existingInstallRefused:
       if let handoff = pendingRecoveryHandoff {
@@ -205,31 +231,45 @@ struct OnePageInstallerView: View {
       DownloadPanel(update: update)
 
     case .planReview(let plan, let acknowledged):
-      DiskSplitPanel(
-        plan: plan,
-        editable: plan.isResizable,
-        isBusy: session.isBusy,
-        onSizeChosen: { bytes in
-          chosenOmarchyBytes = bytes
-          session.setAcknowledged(false)
-          Task { await session.replan(omarchyBytes: bytes) }
-        },
-        onEditingChange: { session.setSizeEditing($0) }
-      )
-      .id(session.planRevision)
-      PrefetchStrip(
-        state: session.prefetchState,
-        onRetry: session.canRetryPrefetch ? { session.retryPrefetch() } : nil
-      )
-      if session.allowsEncryption {
-        encryptionNote
+      if session.installMode == .replaceMacOS, let layout = session.singleBootLayout {
+        SingleBootPlanPanel(layout: layout)
+        PrefetchStrip(
+          state: session.prefetchState,
+          onRetry: session.canRetryPrefetch ? { session.retryPrefetch() } : nil
+        )
+        if session.allowsEncryption {
+          encryptionNote
+        } else {
+          plainInstallCaution
+        }
+        replaceAcknowledgement(acknowledged)
       } else {
-        plainInstallCaution
+        DiskSplitPanel(
+          plan: plan,
+          editable: plan.isResizable,
+          isBusy: session.isBusy,
+          onSizeChosen: { bytes in
+            chosenOmarchyBytes = bytes
+            session.setAcknowledged(false)
+            Task { await session.replan(omarchyBytes: bytes) }
+          },
+          onEditingChange: { session.setSizeEditing($0) }
+        )
+        .id(session.planRevision)
+        PrefetchStrip(
+          state: session.prefetchState,
+          onRetry: session.canRetryPrefetch ? { session.retryPrefetch() } : nil
+        )
+        if session.allowsEncryption {
+          encryptionNote
+        } else {
+          plainInstallCaution
+        }
+        if let notice = session.allocationNotice {
+          Text(notice).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
+        }
+        acknowledgement(acknowledged, resizesMacOS: plan.fixedMacOSBytes == nil)
       }
-      if let notice = session.allocationNotice {
-        Text(notice).font(OmarchyTheme.body).foregroundStyle(OmarchyTheme.caution)
-      }
-      acknowledgement(acknowledged, resizesMacOS: plan.fixedMacOSBytes == nil)
 
     case .awaitingInstall(let plan, let helper, _):
       DiskSplitPanel(plan: plan, editable: false, isBusy: false, onSizeChosen: { _ in })
@@ -305,11 +345,12 @@ struct OnePageInstallerView: View {
 
     case .planReview:
       Button(PlainLanguage.planInstall) {
-        // Approve the exact plan and go straight to the password. If the
-        // helper is not ready the page stays here and says so.
-        session.approve()
-        if session.canStartInstallation {
-          session.presentInstallCredentials()
+        // A replacement asks once more before it approves. The sheet names
+        // the same numbers the plan does, so the second press is informed.
+        if session.installMode == .replaceMacOS {
+          showsReplaceConfirmation = true
+        } else {
+          installAfterConfirmation()
         }
       }
       .omarchyPrimaryButton()
@@ -491,6 +532,54 @@ struct OnePageInstallerView: View {
     .padding(.top, 4)
   }
 
+  /// The destructive plan's tick. It approves a deletion rather than a resize,
+  /// so it uses its own sentence and does not claim a size will change.
+  private func replaceAcknowledgement(_ acknowledged: Bool) -> some View {
+    let text = PlainLanguage.singleBootAcknowledgement
+    return HStack(alignment: .center, spacing: 12) {
+      Toggle(
+        "",
+        isOn: Binding(get: { acknowledged }, set: { session.setAcknowledged($0) })
+      )
+      .labelsHidden()
+      .toggleStyle(.checkbox)
+      .controlSize(.large)
+      .tint(OmarchyTheme.accent)
+      .accessibilityLabel(text)
+      Text(text)
+        .font(OmarchyTheme.heading)
+        .foregroundStyle(OmarchyTheme.accent)
+        .fixedSize(horizontal: false, vertical: true)
+        .onTapGesture { session.setAcknowledged(!acknowledged) }
+      Spacer(minLength: 0)
+    }
+    .disabled(session.isBusy)
+    .padding(.horizontal, 4)
+    .padding(.top, 4)
+  }
+
+  /// The two ways to use the disk. Only shown when the environment says this
+  /// build can replace macOS, so the destructive card is never decorative.
+  private var installModeChoice: some View {
+    VStack(alignment: .leading, spacing: 14) {
+      Text(PlainLanguage.installModeQuestion)
+        .font(OmarchyTheme.body)
+        .foregroundStyle(OmarchyTheme.secondaryText)
+        .frame(maxWidth: .infinity)
+        .padding(.top, 6)
+      HStack(alignment: .top, spacing: 12) {
+        ForEach(InstallMode.allCases, id: \.rawValue) { mode in
+          InstallModeCard(
+            mode: mode,
+            selected: session.installMode == mode,
+            enabled: session.canChangeInstallMode,
+            onSelect: { session.chooseInstallMode(mode) }
+          )
+        }
+      }
+    }
+  }
+
   /// Every build but the private plain-install test encrypts the Omarchy
   /// disk. There is nothing to choose, only the password to keep safe.
   private var encryptionNote: some View {
@@ -622,6 +711,15 @@ struct OnePageInstallerView: View {
   }
 
   // MARK: Plumbing
+
+  /// Approves the exact plan and goes straight to the password. If the helper
+  /// is not ready the page stays here and says so.
+  private func installAfterConfirmation() {
+    session.approve()
+    if session.canStartInstallation {
+      session.presentInstallCredentials()
+    }
+  }
 
   private var approvedSize: String? {
     guard case .awaitingInstall(let plan, _, _) = session.phase else { return nil }
@@ -792,6 +890,115 @@ private struct DownloadPanel: View {
     }
     return
       "\(PlainLanguage.bytes(package.bytesCompleted)) of \(PlainLanguage.bytes(package.totalBytes))"
+  }
+}
+
+// MARK: - Single boot
+
+/// One of the two disk modes. The selected card takes the accent border and
+/// nothing else, so selection reads without making the destructive card
+/// compete with the shipped default. A plan builds against an approved mode,
+/// so neither card can be picked once installation may have started.
+private struct InstallModeCard: View {
+  let mode: InstallMode
+  let selected: Bool
+  let enabled: Bool
+  let onSelect: () -> Void
+
+  var body: some View {
+    VStack(alignment: .leading, spacing: 8) {
+      HStack(spacing: 7) {
+        Image(systemName: selected ? "largecircle.fill.circle" : "circle")
+          .imageScale(.small)
+          .foregroundStyle(selected ? OmarchyTheme.accent : OmarchyTheme.separator)
+        Text(mode.title)
+          .font(OmarchyTheme.heading)
+      }
+      Text(mode.detail)
+        .font(OmarchyTheme.body)
+        .foregroundStyle(OmarchyTheme.secondaryText)
+        .fixedSize(horizontal: false, vertical: true)
+      if let caution = mode.caution {
+        Text(caution)
+          .font(OmarchyTheme.detail)
+          .foregroundStyle(OmarchyTheme.caution)
+          .fixedSize(horizontal: false, vertical: true)
+      }
+    }
+    .padding(.horizontal, 14)
+    .padding(.vertical, 13)
+    .frame(maxWidth: .infinity, alignment: .leading)
+    .background(
+      RoundedRectangle(cornerRadius: OmarchyTheme.cardRadius)
+        .fill(OmarchyTheme.card)
+    )
+    .overlay(
+      RoundedRectangle(cornerRadius: OmarchyTheme.cardRadius)
+        .strokeBorder(selected ? OmarchyTheme.accent : OmarchyTheme.separator, lineWidth: 1)
+    )
+    .contentShape(Rectangle())
+    .onTapGesture { if enabled { onSelect() } }
+    .accessibilityElement(children: .combine)
+    .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
+    .opacity(enabled ? 1 : 0.6)
+  }
+}
+
+/// The plan for a replacement. There is no divider to drag: the two bars are
+/// before and after, and every figure comes from the layout the caller passes.
+private struct SingleBootPlanPanel: View {
+  let layout: SingleBootLayout
+
+  var body: some View {
+    Panel {
+      VStack(alignment: .leading, spacing: 10) {
+        Text("This Mac’s disk")
+          .font(OmarchyTheme.heading)
+          .foregroundStyle(OmarchyTheme.accent)
+        row(
+          label: "Now",
+          caption: PlainLanguage.singleBootNowCaption(layout),
+          fraction: 1,
+          tint: OmarchyTheme.track,
+          foreground: OmarchyTheme.secondaryText)
+        row(
+          label: "After",
+          caption: PlainLanguage.singleBootAfterCaption(layout),
+          fraction: layout.releasedFraction,
+          tint: OmarchyTheme.accent,
+          foreground: OmarchyTheme.accentText)
+        Text(PlainLanguage.singleBootStageOneLine(layout))
+          .omarchyHelpText()
+      }
+      .padding(.vertical, 4)
+    }
+  }
+
+  private func row(
+    label: String, caption: String, fraction: Double, tint: Color, foreground: Color
+  ) -> some View {
+    HStack(spacing: 10) {
+      Text(label)
+        .font(OmarchyTheme.badge)
+        .textCase(.uppercase)
+        .foregroundStyle(OmarchyTheme.secondaryText)
+        .frame(width: 46, alignment: .leading)
+      GeometryReader { geometry in
+        ZStack(alignment: .leading) {
+          RoundedRectangle(cornerRadius: 8).fill(OmarchyTheme.track)
+          RoundedRectangle(cornerRadius: 8)
+            .fill(tint)
+            .frame(width: geometry.size.width * min(1, max(0, fraction)))
+          Text(caption)
+            .font(OmarchyTheme.badge)
+            .foregroundStyle(foreground)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity)
+        }
+      }
+      .frame(height: 24)
+      .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
   }
 }
 

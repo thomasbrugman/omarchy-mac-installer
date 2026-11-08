@@ -173,6 +173,19 @@
         default: break
         }
         session.continueToPlanReview()
+        if scenario == .singleBoot {
+          // The only environment that offers the mode, and switching to it
+          // must clear any acknowledgement carried from the other mode.
+          XCTAssertTrue(session.canChooseInstallMode)
+          XCTAssertNotNil(session.singleBootLayout)
+          XCTAssertEqual(session.installMode, .nextToMacOS)
+          session.chooseInstallMode(.replaceMacOS)
+          XCTAssertEqual(session.installMode, .replaceMacOS)
+          guard case .planReview(_, let acknowledged) = session.phase else {
+            return XCTFail(scenario.title)
+          }
+          XCTAssertFalse(acknowledged)
+        }
         if scenario == .allocationClamped {
           session.setAcknowledged(true)
           await session.replan(omarchyBytes: 650_000_000_000)

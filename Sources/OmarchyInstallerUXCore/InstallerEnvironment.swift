@@ -569,6 +569,14 @@
     var helperStatus: HelperDisplay { get }
     var payloadPrefetchRequired: Bool { get }
     var payloadPrefetchState: PayloadPrefetchState { get }
+    /// Whether this build and engine can replace macOS. False everywhere the
+    /// engine cannot, which is every published build: a stub-only payload
+    /// template does not exist yet, so offering the mode would promise a
+    /// layout `prepare_target` cannot produce.
+    var supportsReplaceMacOS: Bool { get }
+    /// The sizes the single-boot screens show. Nil when there is nothing to
+    /// plan against, which is also when the mode is not offered.
+    var singleBootLayout: SingleBootLayout? { get }
 
     /// Asks macOS for a graceful shutdown (the Apple menu's Shut Down).
     /// Returns true when the machine is actually going down; the preview
@@ -587,6 +595,10 @@
   }
 
   extension InstallerEnvironment {
+    /// No published engine can replace macOS yet. A build that can overrides
+    /// these two together, so the gate and the numbers can never disagree.
+    public var supportsReplaceMacOS: Bool { false }
+    public var singleBootLayout: SingleBootLayout? { nil }
     public func inspectRecoveryAccount() async throws -> RecoveryAccountReply? { nil }
     public func prepareRecoveryHandoff(ticket: String) async throws -> RecoveryAccountReply {
       throw AccountSetupFailure("Recovery handoff is unavailable in this environment.")

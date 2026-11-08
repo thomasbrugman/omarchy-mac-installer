@@ -21,6 +21,41 @@
     public static let inspectingHeadline = "Checking this Mac…"
     public static let inspectingSubheadline = "Making sure this Mac is ready for Omarchy…"
 
+    // MARK: Single boot
+
+    public static let installModeQuestion = "How should Omarchy use this Mac?"
+
+    /// The plan's one line. It names the bytes stage one takes, so the figure
+    /// is this Mac's, not a number written into the source.
+    public static func singleBootStageOneLine(_ layout: SingleBootLayout) -> String {
+      "Install shrinks macOS by \(bytes(layout.stageOneBytes)) for Omarchy’s boot files. Recovery then deletes macOS and gives the rest to Omarchy."
+    }
+
+    /// The dry-before-you-click line above the tick.
+    public static let singleBootAcknowledgement =
+      "I have a current backup and approve deleting macOS."
+
+    /// The before and after captions on the plan, derived from the same
+    /// layout the sentence uses.
+    public static func singleBootNowCaption(_ layout: SingleBootLayout) -> String {
+      "\(bytes(layout.macOSBytes)) · macOS"
+    }
+
+    public static func singleBootAfterCaption(_ layout: SingleBootLayout) -> String {
+      "\(bytes(layout.omarchyBytes)) · Omarchy"
+    }
+
+    /// What the replacement deletes, in the order the disk actually changes.
+    /// The byte count is the whole macOS container, which is what stage two
+    /// removes rather than what stage one shrinks.
+    public static func replaceMacOSConfirmationBody(_ layout: SingleBootLayout) -> String {
+      "Install takes \(bytes(layout.stageOneBytes)) from macOS for Omarchy’s boot files. When you restart into Recovery, you enter your password, macOS’s \(bytes(layout.macOSBytes)) disk is deleted, and Omarchy takes the space. That cannot be undone."
+    }
+
+    public static let replaceMacOSConfirmationTitle = "Replace macOS with Omarchy?"
+    public static let replaceMacOSConfirmationAction = "Replace macOS"
+
+
     // MARK: Screen A2 — Existing install
 
     public static let existingInstallHeadline = "Omarchy is already installed"
