@@ -127,6 +127,27 @@ def stub_esp_and_boot(start=500 * GIB):
     return [stub, esp, boot]
 
 
+class StubOnlyPayloadTests(unittest.TestCase):
+    """What a stub-only payload must still carry.
+
+    Stage one does not write boot.img or root.img, but Recovery does, after
+    macOS is gone. A payload missing either would stage cleanly and fail at the
+    point where there is no going back, so both stay required.
+    """
+
+    def test_the_required_members_keep_the_recovery_images(self):
+        source = (
+            Path(__file__).resolve().parents[1] / "src" / "omarchy_asahi.py"
+        ).read_text()
+        start = source.index("    def _validate_full_os_package(self):")
+        end = source.index("    def _esp_members(self):", start)
+        body = source[start:end]
+        self.assertIn('"boot.img"', body)
+        self.assertIn('"root.img"', body)
+        # And the alignment check must not be conditioned on template kind.
+        self.assertNotIn("if name in members", body)
+
+
 class ExistingInstallDetectionTests(unittest.TestCase):
     def test_a_finished_stage_one_is_recognised(self):
         candidates = collect_existing_installs(

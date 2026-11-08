@@ -2143,13 +2143,17 @@ class AsahiStage1Adapter:
         ):
             raise AsahiAdapterError("invalid Omarchy ESP metadata")
 
+        # boot.img and root.img are required for every template. A stub-only
+        # install does not write them in stage one, but Recovery does, after
+        # macOS is gone: a payload missing them would stage cleanly and then
+        # fail at the point where there is no going back.
         required = {
+            "boot.img",
+            "root.img",
             "esp/m1n1/boot.bin",
             "esp/EFI/BOOT/BOOTAA64.EFI",
             "omarchy-volume.icns",
         }
-        if expected is full_os:
-            required |= {"boot.img", "root.img"}
         members = {}
         for member in self.osins.pkg.infolist():
             path = PurePosixPath(member.filename)
@@ -2189,7 +2193,7 @@ class AsahiStage1Adapter:
             if capacity <= 0 or members[partition["image"]].file_size > capacity:
                 raise AsahiAdapterError("Omarchy image exceeds partition capacity")
         for name in ("boot.img", "root.img"):
-            if name in members and members[name].file_size % 4096 != 0:
+            if members[name].file_size % 4096 != 0:
                 raise AsahiAdapterError("Omarchy image size is not 4KiB aligned")
 
     def _esp_members(self):
